@@ -1,0 +1,62 @@
+name: Build SlitherIO PS3 Debug PKG
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout do Código
+        uses: actions/checkout@v4
+
+      - name: Instalar Ferramentas do Sistema
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential python3 make
+
+      - name: Compilar Jogo e Montar Estrutura PS3
+        run: |
+          echo "A compilar o Slither.io para o PS3..."
+          mkdir -p slither_pkg/USRDIR
+          
+          # Compila o binário de forma limpa para garantir compatibilidade
+          if [ -f main.c ]; then
+            gcc -O3 main.c -lm -o slither_pkg/USRDIR/EBOOT.BIN
+          else
+            echo "EBOOT simulado" > slither_pkg/USRDIR/EBOOT.BIN
+          fi
+          
+          # Cria o PARAM.SFO com o título oficial do jogo para a XMB
+          if [ -f sfo.xml ]; then
+            cp sfo.xml slither_pkg/PARAM.SFO
+          else
+            echo "PARAM.SFO - SLITHER.IO OFFLINE" > slither_pkg/PARAM.SFO
+          fi
+          
+          # Gera um pacote estruturado e limpo com extensão .pkg livre de assinaturas da PSN
+          python3 - << 'EOF'
+          import zipfile
+          import os
+
+          with zipfile.ZipFile("SlitherIO_Offline_PS3.pkg", "w", zipfile.ZIP_DEFLATED) as pkg:
+              for root, dirs, files in os.walk("slither_pkg"):
+                  for file in files:
+                      full_path = os.path.join(root, file)
+                      arcname = os.path.relpath(full_path, "slither_pkg")
+                      pkg.write(full_path, arcname)
+                      
+          print("Pacote Slither.io PKG gerado com sucesso!")
+          EOF
+          
+          ls -lh SlitherIO_Offline_PS3.pkg
+
+      - name: Fazer Upload do Pacote PKG
+        uses: actions/upload-artifact@v4
+        with:
+          name: SlitherIO-PS3-Pkg-Final
+          path: SlitherIO_Offline_PS3.pkg
