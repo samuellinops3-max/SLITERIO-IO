@@ -17,4 +17,4 @@ EBOOT.BIN: $(OBJ)
 	make_self_npdrm PS3_SLITHER.elf EBOOT.BIN UP0001-PS3SLITHE_00-0000000000000000
 
 clean:
-	rm -f *.o *.elf EBOOT.BIN
+	rm -f *.o *.elf EBOOT.BIN>
