@@ -5,125 +5,93 @@ on:
     branches: [ main, master ]
   workflow_dispatch:
 
-env:
-  CONTENT_ID: UP0001-PS3SLITHE_00-0000000000000000
-  TITLE: PS3 Slither
-  TITLE_ID: PS3SLITHE
-  VERSION: 01.00
-
 jobs:
   build:
     runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/ps3dev/ps3dev:latest
+
     steps:
       - name: 📥 Baixar código
         uses: actions/checkout@v4
 
-      - name: 🔧 Instalar dependências
+      - name: ✅ Verificar ambiente
         run: |
-          sudo apt-get update
-          sudo apt-get install -y git wget xz-utils make gcc flex bison \
-            libelf-dev libgmp3-dev libmpfr-dev libmpc-dev zlib1g-dev python3
+          echo "PS3DEV=$PS3DEV"
+          ppu-gcc --version
 
-      - name: 🛠️ Instalar PS3 Toolchain
+      - name: 🏗️ Compilar jogo
         run: |
-          wget -q https://github.com/ps3dev/ps3dev-docker/releases/download/toolchain-20220523/ps3dev.tar.xz
-          mkdir -p ~/ps3dev
-          tar xf ps3dev.tar.xz -C ~/ps3dev
-          echo "PS3DEV=$HOME/ps3dev" >> $GITHUB_ENV
-          echo "PSL1GHT=$HOME/ps3dev" >> $GITHUB_ENV
-          echo "$HOME/ps3dev/bin:$HOME/ps3dev/ppu/bin:$HOME/ps3dev/spu/bin" >> $GITHUB_PATH
+          make clean
+          make
 
-      - name: 🎨 Criar arquivos necessários
+      - name: 📦 Preparar arquivos do PKG
         run: |
-          mkdir -p assets
+          mkdir -p pkg_build/USRDIR pkg_build/TROPDIR
+          cp EBOOT.BIN pkg_build/USRDIR/EBOOT.BIN
           
-          # Criar PARAM.SFO manualmente (sem precisar do comando sfo)
-          # Baixar ícone padrão
-          wget -q -O assets/ICON0.PNG https://via.placeholder.com/512/101826/FFFFFF?text=PS3+Slither
-          
-          # Criar arquivo de configuração
-          cat > assets/pkg.conf << 'EOF'
+          # Baixa ícone
+          wget -q -O pkg_build/ICON0.PNG https://via.placeholder.com/512/101826/FFFFFF?text=PS3+Slither
+
+      - name: 📝 Criar PARAM.SFO
+        run: |
+          python3 << 'PYEOF'
+import struct, os
+
+def make_sfo(path, data):
+    keys, vals = list(data.keys()), list(data.values())
+    kbuf, vbuf, ents = b'', b'', []
+    for k, v in zip(keys, vals):
+        kbuf += k.encode() + b'\x00'
+        if isinstance(v, str):
+            vb = v.encode() + b'\x00'
+            fmt = 4
+        else:
+            vb = str(v).encode() + b'\x00'
+            fmt = 4
+        ents.append(struct.pack('<HHHI', len(kbuf)-len(k)-1, fmt, len(vb), len(vbuf)))
+        vbuf += vb
+    hdr = struct.pack('<4sIIII', b'\x00PSF', 0x100, len(ents), len(kbuf), len(vbuf))
+    hdr += b'\x00' * (0x40 - len(hdr))
+    with open(path, 'wb') as f:
+        f.write(hdr)
+        for e in ents: f.write(e)
+        f.write(kbuf)
+        f.write(vbuf)
+
+    print("✅ PARAM.SFO criado!")
+
+sfo = {
+    "TITLE": "PS3 Slither",
+    "TITLE_ID": "PS3SLITHE",
+    "VERSION": "01.00",
+    "APP_VER": "01.00",
+    "CATEGORY": "HG"
+}
+make_sfo("pkg_build/PARAM.SFO", sfo)
+PYEOF
+
+      - name: 📦 Gerar PKG
+        run: |
+          cd pkg_build
+          cat > package.conf << 'EOF'
 CONTENT_ID = UP0001-PS3SLITHE_00-0000000000000000
 TITLE = PS3 Slither
 TITLE_ID = PS3SLITHE
 VERSION = 01.00
 CATEGORY = HG
 PKGVERSION = 01.00
-APP_VER = 01.00
 EOF
-
-      - name: 🏗️ Compilar e gerar PKG
-        run: |
-          export PS3DEV=$HOME/ps3dev
-          export PSL1GHT=$PS3DEV
-          export PATH=$PATH:$PS3DEV/bin:$PS3DEV/ppu/bin:$PS3DEV/spu/bin
           
-          echo "✅ Ambiente pronto — compilando..."
-          make clean
-          make
-          
-          echo "📦 Gerando PKG..."
-          mkdir -p pkg_build/USRDIR pkg_build/TROPDIR
-          cp EBOOT.BIN pkg_build/USRDIR/EBOOT.BIN
-          cp assets/ICON0.PNG pkg_build/
-          
-          # Criar PARAM.SFO com Python (sem depender de ferramenta externa)
-          python3 -c "
-import struct
-import os
-
-def write_sfo(path, data):
-    keys = list(data.keys())
-    vals = list(data.values())
-    key_table = b''
-    val_table = b''
-    entries = []
-    offset = 0
-    for k, v in zip(keys, vals):
-        key_table += k.encode('utf-8') + b'\\x00'
-        if isinstance(v, str):
-            v_bytes = v.encode('utf-8') + b'\\x00'
-            fmt = 4
-        elif isinstance(v, int):
-            v_bytes = struct.pack('<I', v)
-            fmt = 3
-        else:
-            v_bytes = str(v).encode('utf-8') + b'\\x00'
-            fmt = 4
-        val_offset = len(val_table)
-        val_table += v_bytes
-        key_offset = offset
-        offset += len(k) + 1
-        entries.append(struct.pack('<HHHI', key_offset, fmt, len(v_bytes), val_offset))
-    header = struct.pack('<4sIIII', b'\\x00PSF', 0x100, len(entries), 0, len(key_table))
-    with open(path, 'wb') as f:
-        f.write(header)
-        f.write(b'\\x00' * (0x40 - len(header)))
-        for e in entries:
-            f.write(e)
-        f.write(key_table)
-        f.write(val_table)
-
-sfo_data = {
-    'TITLE': 'PS3 Slither',
-    'TITLE_ID': 'PS3SLITHE',
-    'VERSION': '01.00',
-    'APP_VER': '01.00',
-    'CATEGORY': 'HG',
-}
-write_sfo('pkg_build/PARAM.SFO', sfo_data)
-print('✅ PARAM.SFO criado!')
-"
-          
-          # Criar PKG
-          psn_package_npdrm assets/pkg.conf pkg_build/
+          psn_package_npdrm package.conf .
           package_finalize UP0001-PS3SLITHE_00-0000000000000000.pkg
-          mv UP0001-PS3SLITHE_00-0000000000000000.pkg PS3-Slither.pkg
-          echo "✅ PKG pronto!"
+          mv UP0001-PS3SLITHE_00-0000000000000000.pkg ../PS3-Slither.pkg
+          cd ..
+          echo "✅ PKG gerado com sucesso!"
 
-      - name: 📤 Baixar PKG pronto
+      - name: 📤 Baixar PKG
         uses: actions/upload-artifact@v4
         with:
           name: PS3-Slither-PKG
-          path: 'PS3-Slither.pkg'
+          path: PS3-Slither.pkg
           retention-days: 30
