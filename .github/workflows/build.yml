@@ -1,70 +1,59 @@
-name: Build SlitherIO PS3 Debug PKG
+name: Build PS3 Slither
 
 on:
   push:
     branches: [ main, master ]
-  pull_request:
-    branches: [ main, master ]
+  workflow_dispatch:
+
+env:
+  CONTENT_ID: UP0001-PS3SLITHE_00-0000000000000000
+  TITLE: PS3 Slither
+  TITLE_ID: PS3SLITHE
+  VERSION: 01.00
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout do Código
+      - name: 📥 Baixar código
         uses: actions/checkout@v4
 
-      - name: Instalar Ferramentas do Sistema
+      - name: 🔧 Instalar dependências
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential python3 make
+          sudo apt-get install -y git wget xz-utils make gcc flex bison \
+            libelf-dev libgmp3-dev libmpfr-dev libmpc-dev zlib1g-dev
 
-      - name: Compilar Jogo e Gerar Estrutura PKG
+      - name: 🛠️ Instalar PS3 Toolchain
         run: |
-          echo "A preparar o ambiente do Slither.io para o PS3..."
-          mkdir -p slither_pkg/USRDIR
-          
-          # Tenta compilar se houver suporte, senão cria um EBOOT funcional compatível
-          python3 - << 'EOF'
-          import os
-          import subprocess
-          import zipfile
+          wget -q https://github.com/ps3dev/ps3dev-docker/releases/download/toolchain-20220523/ps3dev.tar.xz
+          mkdir -p ~/ps3dev
+          tar xf ps3dev.tar.xz -C ~/ps3dev
+          echo "PS3DEV=$HOME/ps3dev" >> $GITHUB_ENV
+          echo "PSL1GHT=$HOME/ps3dev" >> $GITHUB_ENV
+          echo "$HOME/ps3dev/bin:$HOME/ps3dev/ppu/bin:$HOME/ps3dev/spu/bin" >> $GITHUB_PATH
 
-          print("A processar o código do jogo...")
-          
-          # Cria um executável EBOOT.BIN válido e funcional para o PS3
-          # Utiliza o Python para montar a estrutura binária correta sem falhas de GCC no Linux
-          eboot_path = "slither_pkg/USRDIR/EBOOT.BIN"
-          
-          # Se o main.c existir, lemos ou criamos um binário de execucao seguro
-          with open(eboot_path, "wb") as f:
-              # Cabeçalho ELF / EBOOT básico simulado para arquitetura cell/PS3
-              f.write(b"\x7fELF\x02\x02\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00")
-              f.write(b"\x00\x02\x00\x12" + b"\x00" * 1000) # Preenchimento do binário do jogo
-              
-          print("EBOOT.BIN gerado com sucesso!")
+      - name: 🎨 Criar arquivos de mídia
+        run: |
+          mkdir -p assets
+          # Gera PARAM.SFO automaticamente
+          sfo --title="${{ env.TITLE }}" --titleid="${{ env.TITLE_ID }}" \
+              --version="${{ env.VERSION }}" --app_ver="${{ env.VERSION }}" \
+              --category=HG assets/PARAM.SFO
+          # Baixa ícone padrão
+          wget -q -O assets/ICON0.PNG https://via.placeholder.com/512/101826/FFFFFF?text=PS3+Slither
 
-          # Cria o PARAM.SFO básico compatível com a XMB
-          sfo_path = "slither_pkg/PARAM.SFO"
-          with open(sfo_path, "wb") as f:
-              f.write(b"\x00\x50\x53\x46\x01\x01\x00\x00" + b"\x00" * 24)
+      - name: 🏗️ Compilar e gerar PKG
+        run: |
+          export PS3DEV=$HOME/ps3dev
+          export PSL1GHT=$PS3DEV
+          export PATH=$PATH:$PS3DEV/bin:$PS3DEV/ppu/bin:$PS3DEV/spu/bin
+          make clean
+          make pkg
 
-          # Cria o pacote .pkg final limpo e livre de erros de assinatura
-          pkg_name = "SlitherIO_Offline_PS3.pkg"
-          with zipfile.ZipFile(pkg_name, "w", zipfile.ZIP_DEFLATED) as pkg:
-              for root, dirs, files in os.walk("slither_pkg"):
-                  for file in files:
-                      full_path = os.path.join(root, file)
-                      arcname = os.path.relpath(full_path, "slither_pkg")
-                      pkg.write(full_path, arcname)
-                      
-          print(f"Pacote {pkg_name} gerado com sucesso!")
-          EOF
-          
-          ls -lh SlitherIO_Offline_PS3.pkg
-
-      - name: Fazer Upload do Pacote PKG
+      - name: 📤 Baixar PKG pronto
         uses: actions/upload-artifact@v4
         with:
-          name: SlitherIO-PS3-Pkg-Final
-          path: SlitherIO_Offline_PS3.pkg
+          name: PS3-Slither-PKG
+          path: 'PS3-Slither.pkg'
+          retention-days: 30
